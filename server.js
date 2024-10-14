@@ -39,98 +39,82 @@ pool.query(`
 
 // Registro de usuario
 app.post('/register', async (req, res) => {
-    console.log('REGISTER')
     const { username, password, email } = req.body;
-    console.log('Datos recibidos - username:', username, ', email:', email);
+
+    // Verificar si faltan campos
+    if (!username || !password || !email) {
+        return res.status(400).json({ error: 'Todos los campos son requeridos' });
+    }
 
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        console.log('Contraseña encriptada:', hashedPassword);
-
-        pool.query(
+        const result = await pool.query(
             'INSERT INTO users (username, password, email) VALUES ($1, $2, $3) RETURNING *',
-            [username, hashedPassword, email],
-            (err, result) => {
-                if (err) {
-                    console.error('Error al insertar el usuario en la BD:', err);
-                    return res.status(500).send('Error al registrar el usuario');
-                }
-                console.log('Usuario registrado con éxito:', result.rows[0]);
-                console.log('Si')
-                res.status(200).send('Usuario registrado con éxito');
-            }
+            [username, hashedPassword, email]
         );
+        return res.status(200).json({ message: 'Usuario registrado con éxito', user: result.rows[0] });
     } catch (err) {
-        console.error('Error en el proceso de registro:', err);
-        res.status(500).send('Error interno en el servidor');
+        if (err.code === '23505') {  // Error de duplicidad (username/email)
+            return res.status(400).json({ error: 'El nombre de usuario o correo ya está en uso' });
+        }
+        console.error('Error al registrar el usuario:', err);
+        return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
 
 // Login de usuario
-app.post('/login', (req, res) => {
-    console.log('Aqui llego')
+app.post('/login', async (req, res) => {
     const { username, password } = req.body;
-    console.log('Intento de login - username:', username);
 
-    pool.query(
-        'SELECT * FROM users WHERE username = $1',
-        [username],
-        async (err, result) => {
-            if (err) {
-                console.error('Error al buscar el usuario en la BD:', err);
-                return res.status(500).send('Error en el servidor');
-            }
-            if (result.rows.length === 0) {
-                console.log('Usuario no encontrado:', username);
-                return res.status(404).send('Usuario no encontrado');
-            }
+    // Verificar si faltan campos
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Usuario y contraseña son requeridos' });
+    }
 
-            const user = result.rows[0];
-            console.log('Usuario encontrado:', user);
+    try {
+        const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
 
-            try {
-                const isMatch = await bcrypt.compare(password, user.password);
-                if (!isMatch) {
-                    console.log('Contraseña incorrecta para el usuario:', username);
-                    return res.status(400).send('Contraseña incorrecta');
-                }
-
-                const token = jwt.sign({ id: user.id, username: user.username }, SECRET, { expiresIn: '1h' });
-                console.log('Token generado para el usuario:', username);
-                res.json({ token });
-            } catch (err) {
-                console.error('Error al comparar contraseñas:', err);
-                res.status(500).send('Error interno en el servidor');
-            }
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
         }
-    );
+
+        const user = result.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+            return res.status(400).json({ error: 'Contraseña incorrecta' });
+        }
+
+        const token = jwt.sign({ id: user.id, username: user.username }, SECRET, { expiresIn: '1h' });
+        return res.json({ token });
+    } catch (err) {
+        console.error('Error al hacer login:', err);
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
 });
 
 // Rutas protegidas (requiere JWT)
 app.get('/profile', verifyToken, (req, res) => {
-    console.log('Accediendo al perfil del usuario con ID:', req.userId);
-    res.send('Bienvenido a tu perfil, autenticado con JWT');
+    return res.json({ message: 'Bienvenido a tu perfil', userId: req.userId });
 });
 
 // Middleware para verificar JWT
 function verifyToken(req, res, next) {
     const token = req.headers['authorization'];
     if (!token) {
-        console.log('Token no proporcionado');
-        return res.status(403).send('Token no proporcionado');
+        return res.status(403).json({ error: 'Token no proporcionado' });
     }
 
     jwt.verify(token, SECRET, (err, decoded) => {
         if (err) {
-            console.log('Token inválido:', err);
-            return res.status(401).send('Token inválido');
+            return res.status(401).json({ error: 'Token inválido' });
         }
         req.userId = decoded.id;
-        console.log('Token verificado, usuario ID:', req.userId);
         next();
     });
 }
 
+// Iniciar el servidor
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });
